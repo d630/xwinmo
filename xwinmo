@@ -1,0 +1,515 @@
+#!/usr/bin/env bash
+
+# Copyright 2014 D630
+# https://github.com/D630/xwinmo
+
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not,
+# see <http://www.gnu.org/licenses/gpl-3.0.html>.
+
+# --- Config
+
+#workarea_x=0
+#workarea_y=0
+#workarea_width=1280
+#workarea_height=800
+
+# --- Functions
+
+_version() { echo "0.1.0.2" ; }
+
+_usage() { echo "xwinmo (-|-F|-h|-v) [-wx|-wy|-ww|-wh] (-c|-f|-H|-M|-m|-U|-s)" ; }
+
+_help()
+{
+    printf "
+$(_usage)
+
+OPTIONS
+-------
+    OPTION                  ARG
+    ------                  ---
+    -
+    -F,  -file              <FILE>
+    -wx, -workarea-x        <PX>
+    -wy, -workarea-y        <PX>
+    -ww, -workarea-width    <PX>
+    -wh, -workarea-height   <PX>
+    -h,  -help
+    -v,  -version
+
+ACTIONS
+-------
+    ACTION                  REQUIRED
+    ------                  --------
+    -c,  -close
+    -H,  -hide
+    -U,  -unhide
+    -f,  -focus
+    -M,  -move-to-desk      <DESK> -W
+    -s,  -size              <ENT> <REF> <GEO> -V
+    -m,  -move              <ENT> <REF> <GEO> <DIREC> -V
+
+    OPTION                  ARG
+    ------                  ---
+    -D,  -desk              <DESK>
+    -e,  -entity            <ENT>
+    -R,  -reference         <REF>
+    -g,  -geo               <GEO>
+    -d,  -direction         <DIREC>
+    -V,  -active
+    -W,  -switch
+
+ARGUMENTS
+---------
+    <FILE>                  File may be a regular file or a named pipe.
+    <PX>                    Pixel size specified by an integer.
+    <DESK>                  Desktop number specified by an integer or
+                            'curr'
+    <ENT>                   Can be 'px' or 'pro', what means 'pixel'
+                            resp. 'procent'.
+    <REF>                   Can be 'window' or 'workarea'.
+    <DIREC>                 Can be 'north', 'east', 'south' or 'west'.
+    <GEO>
+                <X>         Pixel x size specified by an integer.
+                <Y>         Pixel y size specified by an integer.
+                <W>         Pixel width size specified by an integer.
+                <H>         Pixel height size specified by an integer.
+                <PRO>       Procent size specified by an integer.
+                -           Means, that old size is kept.
+
+                Samples:
+                            '<X>,<Y>', '<W>,<H>', '<PRO>,<PRO>', '<PRO>'
+"
+}
+
+_do_wmctrl()
+{
+    wmctrl -i -r "$win" -b "remove,maximized_vert,maximized_horz"
+    wmctrl -i -r "$win" -e "${gravity},${x},${y},${w},${h}"
+}
+
+_check_closing()
+{
+    for xid in "${win_xid[@]}"
+    do
+        wmctrl -i -c "$xid"
+    done
+}
+
+_check_move_to_desk()
+{
+    if [[ $desk_target  = curr ]]
+    then
+        _move() { wmctrl -i -r "$xid" -t "$desk_curr" ; }
+    else
+        _move() { wmctrl -i -r "$xid" -t "$desk_target" ; }
+    fi
+
+    for xid in "${win_xid[@]}"
+    do
+        _move
+    done
+
+    [[ $switch = true ]] && wmctrl -i -a "${win_xid[0]}"
+}
+
+_check_hiding()
+{
+    for xid in "${win_xid[@]}"
+    do
+        wmctrl -i -r "$xid" -b "${hide_action},hidden"
+    done
+}
+
+_check_focusing()
+{
+    for xid in "${win_xid[@]}"
+    do
+        wmctrl -i -a "$xid"
+    done
+    wmctrl -i -a "$win_active"
+}
+
+_check_sizing()
+{
+    i=0
+    for xid in "${win_xid[@]}"
+    do
+        if [[ $region_null ]]
+        then
+            win=$win_active
+            win_w=${win_active_geo_w_h[0]}
+            win_h=${win_active_geo_w_h[1]}
+        else
+            win=$xid
+            win_w=${win_w-${win_geo_w_h[i]%,*}}
+            win_h=${win_h-${win_geo_w_h[i]#*,}}
+        fi
+
+        case $entity_geo in
+            px)
+                    if [[ ${geo%,*} = - ]]
+                    then
+                        w=$win_w
+                    else
+                        w=${geo%,*}
+                    fi
+
+                    if [[ ${geo#*,} = - ]]
+                    then
+                        h=$win_h
+                    else
+                        h=${geo#*,}
+                    fi
+                    ;;
+            pro)
+                    case $reference in
+                        win|window)
+                                if [[ ${geo%,*} = - && ${geo#*,} = - ]]
+                                then
+                                    w=$win_w
+                                    h=$win_h
+                                elif [[ ! ${geo%,*} = - && ! ${geo#*,} = - ]]
+                                then
+                                    w=$((win_w*${geo%,*}/100))
+                                    h=$((win_h*${geo#*,}/100))
+                                elif [[ ${geo%,*} = - ]]
+                                then
+                                    w=$win_w
+                                    h=$((win_h*${geo#*,}/100))
+                                elif [[ ${geo#*,} = - ]]
+                                then
+                                    w=$((win_w*${geo%,*}/100))
+                                    h=$win_h
+                                fi
+                                ;;
+                        wa|workarea)
+                                if [[ ${geo%,*} = - && ${geo#*,} = - ]]
+                                then
+                                    w=$win_w
+                                    h=$win_h
+                                elif [[ ! ${geo%,*} = - && ! ${geo#*,} = - ]]
+                                then
+                                    w=$((workarea_w*${geo%,*}/100))
+                                    h=$((workarea_h*${geo#*,}/100))
+                                elif [[ ${geo%,*} = - ]]
+                                then
+                                    w=$win_w
+                                    h=$((workarea_h*${geo#*,}/100))
+                                elif [[ ${geo#*,} = - ]]
+                                then
+                                    w=$((workarea_w*${geo%,*}/100))
+                                    h=$win_h
+                                fi
+                                ;;
+                    esac
+        esac
+
+        gravity=0
+        x=-1
+        y=-1
+        _do_wmctrl
+
+        [[ $region_null && $win = $win_active ]] && return 1
+        unset win win_w win_h
+        ((i++))
+    done
+}
+
+_check_moving()
+{
+    i=0
+    for xid in "${win_xid[@]}"
+    do
+        if [[ $region_null ]]
+        then
+            win=$win_active
+            win_x=${win_active_geo_x_y[0]}
+            win_y=${win_active_geo_x_y[1]}
+            win_w=${win_active_geo_w_h[0]}
+            win_h=${win_active_geo_w_h[1]}
+        else
+            win=$xid
+            win_x=${win_x-${win_geo_x_y[i]%,*}}
+            win_y=${win_y-${win_geo_x_y[i]#*,}}
+            win_w=${win_w-${win_geo_w_h[i]%,*}}
+            win_h=${win_h-${win_geo_w_h[i]#*,}}
+        fi
+
+        case $entity_geo in
+            px)
+                    if [[ ${geo%,*} = - ]]
+                    then
+                        x=$win_x
+                    else
+                        x=${geo%,*}
+                    fi
+
+                    if [[ ${geo#*,} = - ]]
+                    then
+                        y=$win_y
+                    else
+                        y=${geo#*,}
+                    fi
+                    ;;
+            pro)
+                    case $reference in
+                        wa|workarea)
+                                if [[ ${geo%,*} = - && ${geo#*,} = - ]]
+                                then
+                                    x=$win_x
+                                    y=$win_y
+                                elif [[ ! ${geo%,*} = - && ! ${geo#*,} = - ]]
+                                then
+                                    x=$((win_x+(${workarea[0]}+${workarea[2]})*${geo%,*}/100))
+                                    y=$((win_y+(${workarea[1]}+${workarea[3]})*${geo#*,}/100))
+                                elif [[ ${geo%,*} = - ]]
+                                then
+                                    x=$win_x
+                                    y=$((win_y+(${workarea[1]}+${workarea[3]})*${geo#*,}/100))
+                                elif [[ ${geo#*,} = - ]]
+                                then
+                                    x=$((win_x+(${workarea[0]}+${workarea[2]})*${geo%,*}/100))
+                                    y=$win_y
+                                fi
+                                ;;
+                        win|window)
+                                case $direction in
+                                    north|n)
+                                            x=$win_x
+                                            y=$((win_y-(win_h*geo/100)))
+                                            { (( y < 0 )) || (( y > ${workarea[1]}+${workarea[3]} )) ; } && y=0
+                                            ;;
+                                    east|e)
+                                            x=$((win_x+(win_w*geo/100)))
+                                            y=$win_y
+                                            { (( x < 0 )) || (( x >= ${workarea[0]}+${workarea[2]}-win_w )) ; } && x=$((${workarea[0]}+${workarea[2]}-win_w))
+                                            ;;
+                                    south|s)
+                                            x=$win_x
+                                            y=$((win_y+(win_h*geo/100)))
+                                            { (( y < 0 )) || (( y >= ${workarea[1]}+${workarea[3]}-win_h )) ; } && y=$((${workarea[1]}+${workarea[3]}-win_h))
+                                            ;;
+                                    west|w)
+                                            x=$((win_x-(win_w*geo/100)))
+                                            y=$win_y
+                                            { (( x < 0 )) || (( x > ${workarea[0]}+${workarea[2]} )) ; } && x=0
+                                            ;;
+                                esac
+                                ;;
+                    esac
+                    ;;
+        esac
+
+        w=-1
+        h=-1
+        gravity=0
+        _do_wmctrl
+
+        [[ $region_null && $win = $win_active ]] && return 1
+        ((i++))
+        unset win win_x win_y win_w win_h
+    done
+}
+
+# --- Main
+
+[[ ! $1 ]] && { printf '%s\n' "USAGE: $(_usage)" >&2 ; exit 1 ; }
+
+case ${1#-} in
+    h|help)
+            shift 1
+            _help
+            exit 0
+            ;;
+    v|version)
+            shift 1
+            _version
+            exit 0
+            ;;
+    F|file)
+            [[ -p $2 || -f $2 ]] &&
+            {
+                while read -r i
+                do
+                    eval "$i"
+                done < "$2"
+                shift 2
+            }
+            ;;
+esac
+
+# Get parameter from stdn.
+[[ $1 == - ]] &&
+{
+    while read -r i
+    do
+        eval "$i"
+    done
+    shift 1
+}
+
+# Check special arguments (variables).
+while true
+do
+    case ${1#-} in
+        wx|workarea-x)
+                # Check, if X is set.
+                [[ $2 =~ [[:digit:]]+ ]] && workarea_x=$2
+                shift 2
+                continue
+                ;;
+        wy|workarea-y)
+                # Check, if Y is set.
+                [[ $2 =~ [[:digit:]]+ ]] && workarea_y=$2
+                shift 2
+                continue
+                ;;
+        ww|workarea-width)
+                # Check, if W is set.
+                [[ $2 =~ [[:digit:]]+ ]] && workarea_width=$2
+                shift 2
+                continue
+                ;;
+        wh|workarea-height)
+                # Check, if W is set.
+                [[ $2 =~ [[:digit:]]+ ]] && workarea_height=$2
+                shift 2
+                continue
+                ;;
+        *)
+                break
+                ;;
+    esac
+done
+
+# Get the _NET_WORKAREA.
+read -a workarea < <(xprop -root -notype _NET_WORKAREA) && workarea=( ${workarea[@]//,} ) && workarea=( ${workarea[@]:2} )
+workarea_x=${workarea_x-${workarea[0]}}
+workarea_y=${workarea_y-${workarea[1]}}
+workarea_w=${workarea_width-${workarea[2]}}
+workarea_h=${workarea_height-${workarea[3]}}
+
+x=$workarea_x
+y=$workarea_y
+w=$workarea_w
+h=$workarea_h
+
+# If there is no viewable window, exit.
+(( win_number == 0 )) && { echo "2: There is no window in list." >&2 ; exit 2 ; }
+
+while true
+do
+    case ${1#-} in
+        c|close)
+                action=_check_closing
+                shift 1
+                continue
+                ;;
+        M|move-to-desk)
+                action=_check_move_to_desk
+                shift 1
+                while true
+                do
+                    case ${1#-} in
+                        D|desk)
+                                desk_target=$2
+                                shift 2
+                                continue
+                                ;;
+                        W|switch)
+                                switch=true
+                                shift 1
+                                continue
+                                ;;
+                        *)
+                                break
+                                ;;
+                    esac
+                done
+                ;;
+        H|hide|U|unhide)
+                action=_check_hiding
+                case ${1#-} in
+                    H|hide)
+                            hide_action=add
+                            ;;
+                    U|unhide)
+                            hide_action=remove
+                            ;;
+                esac
+                shift 1
+                continue
+                ;;
+        f|focus)
+                action=_check_focusing
+                shift 1
+                continue
+                ;;
+        s|size|m|move)
+                case ${1#-} in
+                    m|move)
+                            action=_check_moving
+                            ;;
+                    s|size)
+                            action=_check_sizing
+                            ;;
+                esac
+                shift 1
+
+                while true
+                do
+                    case ${1#-} in
+                        V|active)
+                                region_null=${1#-}
+                                shift 1
+                                continue
+                                ;;
+                        e|entity)
+                                entity_geo=$2
+                                shift 2
+                                continue
+                                ;;
+                        R|reference)
+                                reference=$2
+                                shift 2
+                                continue
+                                ;;
+                        g|geo)
+                                geo=$2
+                                shift 2
+                                continue
+                                ;;
+                        d|direction)
+                                direction=$2
+                                shift 2
+                                continue
+                                ;;
+                        *)
+                                break
+                                ;;
+                    esac
+                done
+                ;;
+        *)
+                if [[ $action ]]
+                then
+                    ${action}
+                    exit 0
+                else
+                     { echo "3: No action spezified." >&2 ; exit 3 ; }
+                fi
+                ;;
+    esac
+done
