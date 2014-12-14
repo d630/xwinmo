@@ -103,7 +103,7 @@ Explicitly required:
                         Examples: 'i:0'; 's:web'; ''s:some stuff''.
 <ENT>                   Can be 'px' or 'pro', what means 'pixel'
                         and 'procent'.
-<HACT>                 'add', 'remove' or 'toogle'.
+<HACT>                 'add', 'remove' or 'toggle'.
 <REF>                   Can be 'window', 'win' or 'workarea', 'wa'.
 <DIREC>                 Can be 'north', 'east', 'south', 'west' or
                         'n', 'e', 's', 'w'.
@@ -148,7 +148,7 @@ instead of `--help` you may use `help`.
 
 #### To do
 
-See [file TODO](../master/doc/TODO.md)
+See file [TODO](../master/doc/TODO.md)
 
 #### Bugs & Requests
 
