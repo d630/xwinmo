@@ -9,7 +9,7 @@
 * Make `xwinmo` executable and copy it elsewhere into `<PATH>`
 
 Explicitly required:
-`GNU bash`(1), `wmctrl`(1), `xprop`(1), [xwinpp](https://github.com/D630/xwinpp) >= v0.1.2.5
+`GNU bash`(1), `wmctrl`(1), `xprop`(1), [xwinpp](https://github.com/D630/xwinpp) >= v0.1.2.6
 
 #### Options
 
