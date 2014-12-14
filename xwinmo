@@ -1,238 +1,356 @@
 #!/usr/bin/env bash
 
+# xwinmo
 # Copyright 2014 D630
 # https://github.com/D630/xwinmo
 
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
+# -- DEBUGGING.
 
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
+#printf '%s (%s)\n' "$BASH_VERSION" "${BASH_VERSINFO[5]}" && exit 0
+#set -o xtrace #; exec 2>> ~/xwinmo.log
+#set -o verbose
+#set -o noexec
+#set -o errexit
+#set -o nounset
+#set -o pipefail
+#trap '(read -p "[$BASH_SOURCE:$LINENO] $BASH_COMMAND?")' DEBUG
 
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not,
-# see <http://www.gnu.org/licenses/gpl-3.0.html>.
+# -- SETTINGS.
 
-# --- Config
+#declare vars_base=$(set -o posix ; set)
+builtin shopt -s extglob
 
-#workarea_x=0
-#workarea_y=0
-#workarea_width=1280
-#workarea_height=800
+# --- FUNCTIONS.
 
-# --- Functions
+__xwinmo_version() { builtin echo "0.2.0.0" ; }
 
-_version() { echo "0.1.0.2" ; }
+__xwinmo_usage() { builtin echo "xwinmo (-h|-v) (-c|-f|-H|-M|-m|-s)" ; }
 
-_usage() { echo "xwinmo (-|-F|-h|-v) [-wx|-wy|-ww|-wh] (-c|-f|-H|-M|-m|-U|-s)" ; }
-
-_help()
+__xwinmo_help()
 {
-    printf "
-$(_usage)
+    builtin printf "
+$(__xwinmo_usage)
 
 OPTIONS
 -------
     OPTION                  ARG
     ------                  ---
-    -
-    -F,  -file              <FILE>
-    -wx, -workarea-x        <PX>
-    -wy, -workarea-y        <PX>
-    -ww, -workarea-width    <PX>
-    -wh, -workarea-height   <PX>
-    -h,  -help
-    -v,  -version
+    -1,  --workarea-x=      <PX>
+    -2,  --workarea-y=      <PX>
+    -3,  --workarea-w=      <PX>
+    -4,  --workarea-h=      <PX>
+    -A,  --action=          <HACT>
+    -D,  --desk=            <DESK>
+    -I,  --input-file=      <FILE> or hyphen (-)
+    -R,  --reference=       <REF>
+    -V,  --active
+    -W,  --switch
+    -d,  --direction=       <DIREC>
+    -e,  --entity=          <ENT>
+    -g,  --geo=             <GEO>
 
 ACTIONS
 -------
-    ACTION                  REQUIRED
-    ------                  --------
-    -c,  -close
-    -H,  -hide
-    -U,  -unhide
-    -f,  -focus
-    -M,  -move-to-desk      <DESK> -W
-    -s,  -size              <ENT> <REF> <GEO> -V
-    -m,  -move              <ENT> <REF> <GEO> <DIREC> -V
-
-    OPTION                  ARG
-    ------                  ---
-    -D,  -desk              <DESK>
-    -e,  -entity            <ENT>
-    -R,  -reference         <REF>
-    -g,  -geo               <GEO>
-    -d,  -direction         <DIREC>
-    -V,  -active
-    -W,  -switch
+    ACTION                  ARGS/OPTIONS
+    ------                  ------------
+    -c,  --close
+    -H,  --hide             <HACT>
+    -f,  --focus
+    -M,  --move-to-desk     <DESK> -W
+    -s,  --size             <ENT> <REF> <GEO> -V
+    -m,  --move             <ENT> <REF> <GEO> <DIREC> -V
+    -h,  --help
+    -v,  --version
 
 ARGUMENTS
 ---------
     <FILE>                  File may be a regular file or a named pipe.
     <PX>                    Pixel size specified by an integer.
-    <DESK>                  Desktop number specified by an integer or
-                            'curr'
+    <DESK>                  'curr' or relative to the current desktop
+                            'next' or 'prev'. Specify a desktop
+                            number (starts at 0) with the prefix 'i:'; a
+                            desktop name is prefixed with 's:'.
+                            Examples: 'i:0'; 's:web'; ''s:some stuff''.
     <ENT>                   Can be 'px' or 'pro', what means 'pixel'
-                            resp. 'procent'.
-    <REF>                   Can be 'window' or 'workarea'.
-    <DIREC>                 Can be 'north', 'east', 'south' or 'west'.
+                            and 'procent'.
+    <HACT>                 'add', 'remove' or 'toogle'.
+    <REF>                   Can be 'window', 'win' or 'workarea', 'wa'.
+    <DIREC>                 Can be 'north', 'east', 'south', 'west' or
+                            'n', 'e', 's', 'w'.
     <GEO>
                 <X>         Pixel x size specified by an integer.
                 <Y>         Pixel y size specified by an integer.
                 <W>         Pixel width size specified by an integer.
                 <H>         Pixel height size specified by an integer.
                 <PRO>       Procent size specified by an integer.
-                -           Means, that old size is kept.
+                _           Means, that old size is kept.
 
                 Samples:
                             '<X>,<Y>', '<W>,<H>', '<PRO>,<PRO>', '<PRO>'
+                Examples:
+                            size -e pro -R win -g '<PRO>,<PRO>'
+                            size -e px -g '<W>,<H>'
+                            move -e pro -R win -d east -g '<PRO>'
 "
 }
 
-_do_wmctrl()
+__xwinmo_utils_wmctrl()
 {
-    wmctrl -i -r "$win" -b "remove,maximized_vert,maximized_horz"
-    wmctrl -i -r "$win" -e "${gravity},${x},${y},${w},${h}"
+    command wmctrl -i -r "$win" -b "remove,maximized_vert,maximized_horz"
+    command wmctrl -i -r "$win" -e "${gravity},${x},${y},${w},${h}"
 }
 
-_check_closing()
+__xwinmo_close()
 {
+    builtin declare -a win_xid='(${_xwinmo_data[win_xid]})'
+    builtin declare xid=
+
     for xid in "${win_xid[@]}"
     do
-        wmctrl -i -c "$xid"
+        command wmctrl -i -c "$xid" &
     done
 }
 
-_check_move_to_desk()
+__xwinmo_move_to_desk()
 {
-    if [[ $desk_target  = curr ]]
-    then
-        _move() { wmctrl -i -r "$xid" -t "$desk_curr" ; }
-    else
-        _move() { wmctrl -i -r "$xid" -t "$desk_target" ; }
-    fi
+    builtin declare -i desk_curr="${_xwinmo_data[desk_curr]}"
+    builtin declare -a \
+        desk_names='(${_xwinmo_data[desk_names]})' \
+        desk_numbers='(${_xwinmo_data[desk_numbers]})' \
+        win_xid='(${_xwinmo_data[win_xid]})'
+
+    builtin declare \
+        desk_target= \
+        xid=
+
+    case ${_xwinmo_options[desk_target]} in
+        curr)
+            desk_target=$desk_curr
+            ;;
+        next)
+            desk_target=${desk_numbers[$desk_curr + 1]:-${desk_numbers[0]}}
+            ;;
+        prev)
+            desk_target=${desk_numbers[$desk_curr - 1]:-${desk_numbers[-1]}}
+            ;;
+        i:+([0-9]))
+            desk_target=${_xwinmo_options[desk_target]#*:}
+            ;;
+        s:?*)
+            for i in "${!desk_names[@]}"
+            do
+                [[ ${desk_names[$i]} == \"${_xwinmo_options[desk_target]#*:}\" ]] && \
+                desk_target=${desk_numbers[$i]} && builtin break
+            done
+            ;;
+        *)
+            { builtin echo "Unknown argument for -D." >&2 ; builtin exit 1 ; }
+    esac
 
     for xid in "${win_xid[@]}"
     do
-        _move
+        command wmctrl -i -r "$xid" -t "$desk_target" &
     done
 
-    [[ $switch = true ]] && wmctrl -i -a "${win_xid[0]}"
+    builtin wait
+
+    [[ ${_xwinmo_options[switch_to_desk_target]} ]] && \
+    command wmctrl -i -a "${win_xid[0]}"
 }
 
-_check_hiding()
+__xwinmo_hide()
 {
+    builtin declare -a win_xid='(${_xwinmo_data[win_xid]})'
+    builtin declare xid=
+
     for xid in "${win_xid[@]}"
     do
-        wmctrl -i -r "$xid" -b "${hide_action},hidden"
+        command wmctrl -i -r "$xid" -b "${_xwinmo_options[hide_action]},hidden" &
     done
 }
 
-_check_focusing()
+__xwinmo_focus()
 {
+    builtin declare win_active="${_xwinmo_data[win_active]}"
+    builtin declare -a win_xid='(${_xwinmo_data[win_xid]})'
+    builtin declare xid=
+
     for xid in "${win_xid[@]}"
     do
-        wmctrl -i -a "$xid"
+        command wmctrl -i -a "$xid" &
     done
-    wmctrl -i -a "$win_active"
+
+    builtin wait
+
+    command wmctrl -i -a "$win_active"
 }
 
-_check_sizing()
+__xwinmo_size()
 {
-    i=0
+    builtin declare \
+        geo="${_xwinmo_options[geo]}" \
+        win_active="${_xwinmo_data[win_active]}"
+
+    builtin declare -i \
+        workarea_w="${_xwinmo_data[workarea_w]}" \
+        workarea_h="${_xwinmo_data[workarea_h]}"
+
+    builtin declare -a \
+        win_active_geo_w_h='(${_xwinmo_data[win_active_geo_w_h]})' \
+        win_geo_w_h='(${_xwinmo_data[win_geo_w_h]})' \
+        win_xid='(${_xwinmo_data[win_xid]})'
+
+    builtin declare \
+        win= \
+        xid=
+
+    builtin declare -i \
+        gravity= \
+        h= \
+        i= \
+        w= \
+        win_h= \
+        win_w= \
+        x=-1 \
+        y=-1
+
+    win_active_geo_w_h=(${win_active_geo_w_h[@]//,/ })
+
+    [[ -z $geo ]] && \
+        { builtin printf '%s\n' "${0}: geo is not set" >&2 ; builtin exit 1 ; }
+
     for xid in "${win_xid[@]}"
     do
-        if [[ $region_null ]]
+        if [[ ${_xwinmo_options[active]} ]]
         then
             win=$win_active
             win_w=${win_active_geo_w_h[0]}
             win_h=${win_active_geo_w_h[1]}
         else
             win=$xid
-            win_w=${win_w-${win_geo_w_h[i]%,*}}
-            win_h=${win_h-${win_geo_w_h[i]#*,}}
+            win_w=${win_geo_w_h[$i]%,*}
+            win_h=${win_geo_w_h[$i]#*,}
         fi
-
-        case $entity_geo in
+        case ${_xwinmo_options[entity_geo]} in
             px)
-                    if [[ ${geo%,*} = - ]]
-                    then
-                        w=$win_w
-                    else
-                        w=${geo%,*}
-                    fi
-
-                    if [[ ${geo#*,} = - ]]
-                    then
-                        h=$win_h
-                    else
-                        h=${geo#*,}
-                    fi
-                    ;;
+                if [[ ${geo%,*} == _ ]]
+                then
+                    w=$win_w
+                else
+                    w=${geo%,*}
+                fi
+                if [[ ${geo#*,} == _ ]]
+                then
+                    h=$win_h
+                else
+                    h=${geo#*,}
+                fi
+                ;;
             pro)
-                    case $reference in
-                        win|window)
-                                if [[ ${geo%,*} = - && ${geo#*,} = - ]]
-                                then
-                                    w=$win_w
-                                    h=$win_h
-                                elif [[ ! ${geo%,*} = - && ! ${geo#*,} = - ]]
-                                then
-                                    w=$((win_w*${geo%,*}/100))
-                                    h=$((win_h*${geo#*,}/100))
-                                elif [[ ${geo%,*} = - ]]
-                                then
-                                    w=$win_w
-                                    h=$((win_h*${geo#*,}/100))
-                                elif [[ ${geo#*,} = - ]]
-                                then
-                                    w=$((win_w*${geo%,*}/100))
-                                    h=$win_h
-                                fi
-                                ;;
-                        wa|workarea)
-                                if [[ ${geo%,*} = - && ${geo#*,} = - ]]
-                                then
-                                    w=$win_w
-                                    h=$win_h
-                                elif [[ ! ${geo%,*} = - && ! ${geo#*,} = - ]]
-                                then
-                                    w=$((workarea_w*${geo%,*}/100))
-                                    h=$((workarea_h*${geo#*,}/100))
-                                elif [[ ${geo%,*} = - ]]
-                                then
-                                    w=$win_w
-                                    h=$((workarea_h*${geo#*,}/100))
-                                elif [[ ${geo#*,} = - ]]
-                                then
-                                    w=$((workarea_w*${geo%,*}/100))
-                                    h=$win_h
-                                fi
-                                ;;
-                    esac
+                case ${_xwinmo_options[reference]} in
+                    win|window)
+                        if [[ ${geo%,*} == _ && ${geo#*,} == _ ]]
+                        then
+                            w=$win_w
+                            h=$win_h
+                        elif [[ ! ${geo%,*} == _ && ! ${geo#*,} == _ ]]
+                        then
+                            w=$((win_w * ${geo%,*} / 100))
+                            h=$((win_h * ${geo#*,} / 100))
+                        elif [[ ${geo%,*} == _ ]]
+                        then
+                            w=$win_w
+                            h=$((win_h * ${geo#*,} / 100))
+                        elif [[ ${geo#*,} == _ ]]
+                        then
+                            w=$((win_w * ${geo%,*} / 100))
+                            h=$win_h
+                        fi
+                        ;;
+                    wa|workarea)
+                        if [[ ${geo%,*} == _ && ${geo#*,} == _ ]]
+                        then
+                            w=$win_w
+                            h=$win_h
+                        elif [[ ! ${geo%,*} == _ && ! ${geo#*,} == _ ]]
+                        then
+                            w=$((workarea_w * ${geo%,*} / 100))
+                            h=$((workarea_h * ${geo#*,} / 100))
+                        elif [[ ${geo%,*} == _ ]]
+                        then
+                            w=$win_w
+                            h=$((workarea_h * ${geo#*,} / 100))
+                        elif [[ ${geo#*,} == _ ]]
+                        then
+                            w=$((workarea_w * ${geo%,*} / 100))
+                            h=$win_h
+                        fi
+                        ;;
+                    *)
+                        { builtin printf '%s\n' "${0}: No valid value for reference: '${_xwinmo_options[reference]}'" >&2 ; builtin exit 1 ; }
+                esac
+                ;;
+            *)
+                { builtin printf '%s\n' "${0}: No valid value for entity: '${_xwinmo_options[entity_geo]}'" >&2 ; builtin exit 1 ; }
         esac
 
-        gravity=0
-        x=-1
-        y=-1
-        _do_wmctrl
+        __xwinmo_utils_wmctrl
 
-        [[ $region_null && $win = $win_active ]] && return 1
-        unset win win_w win_h
+        [[ ${_xwinmo_options[active]} && $win =~ $win_active ]] && builtin return 1
+
+        builtin unset -v \
+            win \
+            win_w \
+            win_h
+
         ((i++))
     done
 }
 
-_check_moving()
+__xwinmo_move()
 {
-    i=0
+    builtin declare -a \
+        win_active_geo_x_y='(${_xwinmo_data[win_active_geo_x_y]})' \
+        win_active_geo_w_h='(${_xwinmo_data[win_active_geo_w_h]})' \
+        win_geo_x_y='(${_xwinmo_data[win_geo_x_y]})' \
+        win_geo_w_h='(${_xwinmo_data[win_geo_w_h]})' \
+        win_xid='(${_xwinmo_data[win_xid]})'
+
+    builtin declare \
+        geo="${_xwinmo_options[geo]}" \
+        win_active="${_xwinmo_data[win_active]}"
+
+    builtin declare -i \
+        workarea_x="${_xwinmo_data[workarea_x]}" \
+        workarea_y="${_xwinmo_data[workarea_y]}" \
+        workarea_w="${_xwinmo_data[workarea_w]}" \
+        workarea_h="${_xwinmo_data[workarea_h]}"
+
+    builtin declare \
+        win= \
+        xid=
+
+    builtin declare -i \
+        gravity= \
+        h=-1 \
+        i= \
+        w=-1 \
+        win_x= \
+        win_y= \
+        win_h= \
+        win_w= \
+        x= \
+        y=
+
+    win_active_geo_x_y=(${win_active_geo_x_y[@]//,/ })
+    win_active_geo_w_h=(${win_active_geo_w_h[@]//,/ })
+
+    [[ -z $geo ]] && \
+        { builtin printf '%s\n' "${0}: geo is not set" >&2 ; builtin exit 1 ; }
+
     for xid in "${win_xid[@]}"
     do
-        if [[ $region_null ]]
+        if [[ ${_xwinmo_options[active]} ]]
         then
             win=$win_active
             win_x=${win_active_geo_x_y[0]}
@@ -241,275 +359,313 @@ _check_moving()
             win_h=${win_active_geo_w_h[1]}
         else
             win=$xid
-            win_x=${win_x-${win_geo_x_y[i]%,*}}
-            win_y=${win_y-${win_geo_x_y[i]#*,}}
-            win_w=${win_w-${win_geo_w_h[i]%,*}}
-            win_h=${win_h-${win_geo_w_h[i]#*,}}
+            win_x=${win_geo_x_y[i]%,*}
+            win_y=${win_geo_x_y[i]#*,}
+            win_w=${win_geo_w_h[i]%,*}
+            win_h=${win_geo_w_h[i]#*,}
         fi
-
-        case $entity_geo in
+        case ${_xwinmo_options[entity_geo]} in
             px)
-                    if [[ ${geo%,*} = - ]]
-                    then
-                        x=$win_x
-                    else
-                        x=${geo%,*}
-                    fi
-
-                    if [[ ${geo#*,} = - ]]
-                    then
-                        y=$win_y
-                    else
-                        y=${geo#*,}
-                    fi
-                    ;;
-            pro)
-                    case $reference in
-                        wa|workarea)
-                                if [[ ${geo%,*} = - && ${geo#*,} = - ]]
-                                then
-                                    x=$win_x
-                                    y=$win_y
-                                elif [[ ! ${geo%,*} = - && ! ${geo#*,} = - ]]
-                                then
-                                    x=$((win_x+(${workarea[0]}+${workarea[2]})*${geo%,*}/100))
-                                    y=$((win_y+(${workarea[1]}+${workarea[3]})*${geo#*,}/100))
-                                elif [[ ${geo%,*} = - ]]
-                                then
-                                    x=$win_x
-                                    y=$((win_y+(${workarea[1]}+${workarea[3]})*${geo#*,}/100))
-                                elif [[ ${geo#*,} = - ]]
-                                then
-                                    x=$((win_x+(${workarea[0]}+${workarea[2]})*${geo%,*}/100))
-                                    y=$win_y
-                                fi
-                                ;;
-                        win|window)
-                                case $direction in
-                                    north|n)
-                                            x=$win_x
-                                            y=$((win_y-(win_h*geo/100)))
-                                            { (( y < 0 )) || (( y > ${workarea[1]}+${workarea[3]} )) ; } && y=0
-                                            ;;
-                                    east|e)
-                                            x=$((win_x+(win_w*geo/100)))
-                                            y=$win_y
-                                            { (( x < 0 )) || (( x >= ${workarea[0]}+${workarea[2]}-win_w )) ; } && x=$((${workarea[0]}+${workarea[2]}-win_w))
-                                            ;;
-                                    south|s)
-                                            x=$win_x
-                                            y=$((win_y+(win_h*geo/100)))
-                                            { (( y < 0 )) || (( y >= ${workarea[1]}+${workarea[3]}-win_h )) ; } && y=$((${workarea[1]}+${workarea[3]}-win_h))
-                                            ;;
-                                    west|w)
-                                            x=$((win_x-(win_w*geo/100)))
-                                            y=$win_y
-                                            { (( x < 0 )) || (( x > ${workarea[0]}+${workarea[2]} )) ; } && x=0
-                                            ;;
-                                esac
-                                ;;
-                    esac
-                    ;;
-        esac
-
-        w=-1
-        h=-1
-        gravity=0
-        _do_wmctrl
-
-        [[ $region_null && $win = $win_active ]] && return 1
-        ((i++))
-        unset win win_x win_y win_w win_h
-    done
-}
-
-# --- Main
-
-[[ ! $1 ]] && { printf '%s\n' "USAGE: $(_usage)" >&2 ; exit 1 ; }
-
-case ${1#-} in
-    h|help)
-            shift 1
-            _help
-            exit 0
-            ;;
-    v|version)
-            shift 1
-            _version
-            exit 0
-            ;;
-    F|file)
-            [[ -p $2 || -f $2 ]] &&
-            {
-                while read -r i
-                do
-                    eval "$i"
-                done < "$2"
-                shift 2
-            }
-            ;;
-esac
-
-# Get parameter from stdn.
-[[ $1 == - ]] &&
-{
-    while read -r i
-    do
-        eval "$i"
-    done
-    shift 1
-}
-
-# Check special arguments (variables).
-while true
-do
-    case ${1#-} in
-        wx|workarea-x)
-                # Check, if X is set.
-                [[ $2 =~ [[:digit:]]+ ]] && workarea_x=$2
-                shift 2
-                continue
-                ;;
-        wy|workarea-y)
-                # Check, if Y is set.
-                [[ $2 =~ [[:digit:]]+ ]] && workarea_y=$2
-                shift 2
-                continue
-                ;;
-        ww|workarea-width)
-                # Check, if W is set.
-                [[ $2 =~ [[:digit:]]+ ]] && workarea_width=$2
-                shift 2
-                continue
-                ;;
-        wh|workarea-height)
-                # Check, if W is set.
-                [[ $2 =~ [[:digit:]]+ ]] && workarea_height=$2
-                shift 2
-                continue
-                ;;
-        *)
-                break
-                ;;
-    esac
-done
-
-# Get the _NET_WORKAREA.
-read -a workarea < <(xprop -root -notype _NET_WORKAREA) && workarea=( ${workarea[@]//,} ) && workarea=( ${workarea[@]:2} )
-workarea_x=${workarea_x-${workarea[0]}}
-workarea_y=${workarea_y-${workarea[1]}}
-workarea_w=${workarea_width-${workarea[2]}}
-workarea_h=${workarea_height-${workarea[3]}}
-
-x=$workarea_x
-y=$workarea_y
-w=$workarea_w
-h=$workarea_h
-
-# If there is no viewable window, exit.
-(( win_number == 0 )) && { echo "2: There is no window in list." >&2 ; exit 2 ; }
-
-while true
-do
-    case ${1#-} in
-        c|close)
-                action=_check_closing
-                shift 1
-                continue
-                ;;
-        M|move-to-desk)
-                action=_check_move_to_desk
-                shift 1
-                while true
-                do
-                    case ${1#-} in
-                        D|desk)
-                                desk_target=$2
-                                shift 2
-                                continue
-                                ;;
-                        W|switch)
-                                switch=true
-                                shift 1
-                                continue
-                                ;;
-                        *)
-                                break
-                                ;;
-                    esac
-                done
-                ;;
-        H|hide|U|unhide)
-                action=_check_hiding
-                case ${1#-} in
-                    H|hide)
-                            hide_action=add
-                            ;;
-                    U|unhide)
-                            hide_action=remove
-                            ;;
-                esac
-                shift 1
-                continue
-                ;;
-        f|focus)
-                action=_check_focusing
-                shift 1
-                continue
-                ;;
-        s|size|m|move)
-                case ${1#-} in
-                    m|move)
-                            action=_check_moving
-                            ;;
-                    s|size)
-                            action=_check_sizing
-                            ;;
-                esac
-                shift 1
-
-                while true
-                do
-                    case ${1#-} in
-                        V|active)
-                                region_null=${1#-}
-                                shift 1
-                                continue
-                                ;;
-                        e|entity)
-                                entity_geo=$2
-                                shift 2
-                                continue
-                                ;;
-                        R|reference)
-                                reference=$2
-                                shift 2
-                                continue
-                                ;;
-                        g|geo)
-                                geo=$2
-                                shift 2
-                                continue
-                                ;;
-                        d|direction)
-                                direction=$2
-                                shift 2
-                                continue
-                                ;;
-                        *)
-                                break
-                                ;;
-                    esac
-                done
-                ;;
-        *)
-                if [[ $action ]]
+                if [[ ${geo%,*} == _ ]]
                 then
-                    ${action}
-                    exit 0
+                    x=$win_x
                 else
-                     { echo "3: No action spezified." >&2 ; exit 3 ; }
+                    x=${geo%,*}
+                fi
+                if [[ ${geo#*,} == _ ]]
+                then
+                    y=$win_y
+                else
+                    y=${geo#*,}
                 fi
                 ;;
+            pro)
+                case ${_xwinmo_options[reference]} in
+                    wa|workarea)
+                        if [[ ${geo%,*} == _ && ${geo#*,} == _ ]]
+                        then
+                            x=$win_x
+                            y=$win_y
+                        elif [[ ! ${geo%,*} == _ && ! ${geo#*,} == _ ]]
+                        then
+                            x=$((win_x + (workarea_x + workarea_w) * ${geo%,*} / 100))
+                            y=$((win_y + (workarea_y + workarea_h) * ${geo#*,} / 100))
+                        elif [[ ${geo%,*} == _ ]]
+                        then
+                            x=$win_x
+                            y=$((win_y + (workarea_y + workarea_h) * ${geo#*,} / 100))
+                        elif [[ ${geo#*,} == _ ]]
+                        then
+                            x=$((win_x + (workarea_x + workarea_w) * ${geo%,*} / 100))
+                            y=$win_y
+                        fi
+                        ;;
+                    win|window)
+                        case ${_xwinmo_options[direction]} in
+                            north|n)
+                                x=$win_x
+                                y=$((win_y - (win_h * geo / 100)))
+                                { ((y < 0)) || ((y > workarea_y + workarea_h)) ; } && y=0
+                                ;;
+                            east|e)
+                                x=$((win_x + (win_w * geo / 100)))
+                                y=$win_y
+                                { ((x < 0)) || ((x >= workarea_x + workarea_w - win_w )) ; } && x=$((workarea_x + workarea_w - win_w))
+                                ;;
+                            south|s)
+                                x=$win_x
+                                y=$((win_y + (win_h * geo / 100)))
+                                { ((y < 0)) || ((y >= workarea_y + workarea_h - win_h)) ; } && y=$((workarea_y + workarea_h - win_h))
+                                ;;
+                            west|w)
+                                x=$((win_x - (win_w * geo / 100)))
+                                y=$win_y
+                                { ((x < 0)) || ((x > workarea_x + workarea_w)) ; } && x=0
+                                ;;
+                            *)
+                                { builtin printf '%s\n' "${0}: No valid value for direction: '${_xwinmo_options[direction]}'" >&2 ; builtin exit 1 ; }
+                        esac
+                        ;;
+                    *)
+                        { builtin printf '%s\n' "${0}: No valid value for reference: '${_xwinmo_options[reference]}'" >&2 ; builtin exit 1 ; }
+                esac
+                ;;
+            *)
+                { builtin printf '%s\n' "${0}: No valid value for entity: '${_xwinmo_options[entity_geo]}'" >&2 ; builtin exit 1 ; }
+        esac
+
+        __xwinmo_utils_wmctrl &
+
+        [[ ${_xwinmo_options[active]} && $win =~ $win_active ]] && builtin return 1
+
+        builtin unset -v \
+            win \
+            win_x \
+            win_y \
+            win_w \
+            win_h
+
+        ((i++))
+    done
+}
+
+__xwinmo_calculate()
+{
+    builtin declare -a workarea="()"
+    builtin read -a workarea < <(command xprop -root -notype _NET_WORKAREA) &&
+        workarea=(${workarea[@]//,}) &&
+        workarea=(${workarea[@]:2})
+    _xwinmo_data[workarea_x]=${_xwinmo_options[workarea_x]:-${workarea[${_xwinmo_data[desk_curr]} * 4]}}
+    _xwinmo_data[workarea_y]=${_xwinmo_options[workarea_y]:-${workarea[${_xwinmo_data[desk_curr]} * 4 + 1]}}
+    _xwinmo_data[workarea_w]=${_xwinmo_options[workarea_w]:-${workarea[${_xwinmo_data[desk_curr]} * 4 + 2]}}
+    _xwinmo_data[workarea_h]=${_xwinmo_options[workarea_h]:-${workarea[${_xwinmo_data[desk_curr]} * 4 + 3]}}
+}
+
+__xwinmo_read()
+case ${1%=*} in
+    _xwinpp_desk_curr)
+        _xwinmo_data[desk_curr]=${1#*=}
+        ;;
+    _xwinpp_desk_number)
+        _xwinmo_data[desk_number]=${1#*=}
+        ;;
+    _xwinpp_win_number)
+        _xwinmo_data[win_number]=${1#*=}
+        ;;
+    _xwinpp_desk_numbers)
+        builtin declare -a _xwinpp_desk_numbers="()"
+        builtin eval "$1"
+        _xwinmo_data[desk_numbers]=${_xwinpp_desk_numbers[@]}
+        ;;
+    _xwinpp_desk_names)
+        builtin declare -a _xwinpp_desk_names="()"
+        builtin eval _xwinpp_desk_names='${1#*=}'
+        _xwinmo_data[desk_names]=${_xwinpp_desk_names[@]//[()]/}
+        ;;
+    _xwinpp_win_xid)
+        builtin declare -a _xwinpp_win_xid="()"
+        builtin eval "$1"
+        _xwinmo_data[win_xid]=${_xwinpp_win_xid[@]}
+        ;;
+    _xwinpp_win_geo_x_y)
+        builtin declare -a _xwinpp_win_geo_x_y="()"
+        builtin eval "$1"
+        _xwinmo_data[win_geo_x_y]=${_xwinpp_win_geo_x_y[@]}
+        ;;
+    _xwinpp_win_geo_w_h)
+        builtin declare -a _xwinpp_win_geo_w_h="()"
+        builtin eval "$1"
+        _xwinmo_data[win_geo_w_h]=${_xwinpp_win_geo_w_h[@]}
+        ;;
+    _xwinpp_win_active)
+        _xwinmo_data[win_active]=${1#*=}
+        ;;
+    _xwinpp_win_active_geo_x_y)
+        builtin declare -a _xwinpp_win_active_geo_x_y="()"
+        builtin eval "$1"
+        _xwinmo_data[win_active_geo_x_y]=${_xwinpp_win_active_geo_x_y[@]}
+        ;;
+    _xwinpp_win_active_geo_w_h)
+        builtin declare -a _xwinpp_win_active_geo_w_h="()"
+        builtin eval "$1"
+        _xwinmo_data[win_active_geo_w_h]=${_xwinpp_win_active_geo_w_h[@]}
+        ;;
+    *)
+        { builtin printf '%s\n' "Irregular variable inside input: '$1'" >&2 ; builtin return 1 ; }
+esac
+
+__xwinmo_main()
+{
+    (($# == 0)) && \
+        { builtin printf '%s\n' "${0}: USAGE: $(__xwinmo_usage)" >&2 ; builtin exit 1 ; }
+
+    builtin declare \
+        arg= \
+        args= \
+        delim=\'
+
+    for arg
+    do
+        arg=${arg#--}
+        case $arg in
+            action=?*)          args="${args}-A ${delim}${arg#*=}${delim} "  ;;
+            active)             args="${args}-V "                            ;;
+            close)              args="${args}-c "                            ;;
+            desk=?*)            args="${args}-D ${delim}${arg#*=}${delim} "  ;;
+            direction=?*)       args="${args}-d ${delim}${arg#*=}${delim} "  ;;
+            entity=?*)          args="${args}-e ${delim}${arg#*=}${delim} "  ;;
+            focus)              args="${args}-f "                            ;;
+            geo=?*)             args="${args}-g ${delim}${arg#*=}${delim} "  ;;
+            help)               args="${args}-h "                            ;;
+            hide)               args="${args}-H "                            ;;
+            input-file=?*)      args="${args}-I ${delim}${arg#*=}${delim} "  ;;
+            move)               args="${args}-m "                            ;;
+            move-to-desk)       args="${args}-M "                            ;;
+            reference=?*)       args="${args}-R ${delim}${arg#*=}${delim} "  ;;
+            size)               args="${args}-s "                            ;;
+            switch)             args="${args}-W "                            ;;
+            version)            args="${args}-v "                            ;;
+            workarea-h=?*)      args="${args}-4 ${delim}${arg#*=}${delim} "  ;;
+            workarea-w=?*)      args="${args}-3 ${delim}${arg#*=}${delim} "  ;;
+            workarea-x=?*)      args="${args}-1 ${delim}${arg#*=}${delim} "  ;;
+            workarea-y=?*)      args="${args}-2 ${delim}${arg#*=}${delim} "  ;;
+            *)                  if [[ ${arg:0:1} == - ]]
+                                then
+                                    args="${args}${arg} "
+                                else
+                                    args="${args}${delim}${arg}${delim} "
+                                fi
+        esac
+    done
+
+    function __xwinmo_set_opts
+    if [[ $OPTARG == -?* ]]
+    then
+        { builtin printf '%s\n' "${0}: Option '-${opt}' requires an argument" 1>&2 ; builtin exit 1 ; }
+    else
+        _xwinmo_options[$1]=$2
+    fi
+
+    builtin declare opt=
+
+    builtin declare -A \
+        _xwinmo_data \
+        _xwinmo_options
+
+    builtin eval builtin set -- "$args"
+    while builtin getopts :1:2:3:4:A:D:HI:MR:VWcd:e:fg:hmsv opt
+    do
+        case $opt in
+            1)      __xwinmo_set_opts "workarea_x" "$OPTARG"                     ;;
+            2)      __xwinmo_set_opts "workarea_y" "$OPTARG"                     ;;
+            3)      __xwinmo_set_opts "workarea_w" "$OPTARG"                     ;;
+            4)      __xwinmo_set_opts "workarea_h" "$OPTARG"                     ;;
+            A)      __xwinmo_set_opts "hide_action" "$OPTARG"                    ;;
+            D)      __xwinmo_set_opts "desk_target" "$OPTARG"                    ;;
+            H)      _xwinmo_options[action]=hide                                 ;;
+            I)      XWINMO_INPUT_FILE=$OPTARG                                    ;;
+            M)      _xwinmo_options[action]=move-to-desk                         ;;
+            R)      __xwinmo_set_opts "reference" "$OPTARG"                      ;;
+            V)      _xwinmo_options[active]=active                               ;;
+            W)      _xwinmo_options[switch_to_desk_target]=switch_to_desk_target ;;
+            c)      _xwinmo_options[action]=close                                ;;
+            d)      __xwinmo_set_opts "direction" "$OPTARG"                      ;;
+            e)      __xwinmo_set_opts "entity_geo" "$OPTARG"                     ;;
+            f)      _xwinmo_options[action]=focus                                ;;
+            g)      __xwinmo_set_opts "geo" "$OPTARG"                            ;;
+            h)      __xwinmo_help ; exit 0                                       ;;
+            m)      _xwinmo_options[action]=move                                 ;;
+            s)      _xwinmo_options[action]=size                                 ;;
+            v)      __xwinmo_version ; exit 0                                    ;;
+            :)      builtin printf '%s\n' "${0}: Option '-${OPTARG}' requires an argument" 1>&2
+                    builtin exit 1                                          ;;
+            \?)     builtin printf '%s\n' "${0}: Unknown flag: '-${OPTARG}'" 1>&2
+                    builtin exit 1
+        esac
+    done
+
+    [[ $XWINMO_INPUT_FILE ]] && {
+        _xwinmo_options[file_input]=$XWINMO_INPUT_FILE
+        builtin unset -v XWINREG_INPUT_FILE
+        if [[ ${_xwinmo_options[file_input]} == - ]]
+        then
+            if [[ -p /dev/stdin ]]
+            then
+                while builtin read -r
+                do
+                    __xwinmo_read "$REPLY"
+                done
+            else
+                { builtin printf '%s\n' "${0}: Stdin is not coming from a pipe" >&2 ; builtin exit 1 ; }
+            fi
+        else
+            if [[ -p ${_xwinmo_options[file_input]} || -f ${_xwinmo_options[file_input]} ]]
+            then
+                while builtin read -r
+                do
+                    __xwinmo_read "$REPLY"
+                done < "${_xwinmo_options[file_input]}"
+            else
+                { builtin printf '%s\n' "${0}: File does not exist or is neather a regular file nor a named pipe" >&2 ; builtin exit 1 ; }
+            fi
+        fi
+    }
+
+    builtin unset -v \
+        arg \
+        args \
+        delim \
+        opt
+
+    [[ ${_xwinmo_data[win_number]} -lt 1 ]] && \
+        { builtin printf '%s\n' "${0}: Not enough windows to work with" >&2 ; builtin exit 1 ; }
+
+    case ${_xwinmo_options[action]} in
+        close)
+            __xwinmo_close
+            ;;
+        move-to-desk)
+            __xwinmo_move_to_desk
+            ;;
+        hide)
+            __xwinmo_hide
+            ;;
+        focus)
+            __xwinmo_focus
+            ;;
+        size)
+            __xwinmo_calculate
+            __xwinmo_size
+            ;;
+        move)
+            __xwinmo_calculate
+            __xwinmo_move
+            ;;
+        *)
+            { builtin printf '%s\n' "${0}: No valid action spezified" >&2 ; builtin exit 1 ; }
     esac
-done
+}
+
+# --- MAIN.
+
+__xwinmo_main "$@"

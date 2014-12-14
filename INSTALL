@@ -1,2 +1,0 @@
-1. gzip xwinmo.1 and cp it to /usr/share/man/man1/xwinmo.1
-2. make xwinmo executable and cp it to /usr/local/bin or $HOME/bin
